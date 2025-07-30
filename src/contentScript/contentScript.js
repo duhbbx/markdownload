@@ -97,9 +97,34 @@ function getHTMLOfSelection() {
 }
 
 function getSelectionAndDom() {
-    return {
-        selection: getHTMLOfSelection(),
-        dom: getHTMLOfDocument()
+    console.log('🔧 [MarkDownload] 🔥 CONTENTSCRIPT: getSelectionAndDom() called');
+    console.log('🔧 [MarkDownload] 🔥 CONTENTSCRIPT: document.readyState:', document.readyState);
+    console.log('🔧 [MarkDownload] 🔥 CONTENTSCRIPT: document.body exists:', !!document.body);
+    console.log('🔧 [MarkDownload] 🔥 CONTENTSCRIPT: document.documentElement exists:', !!document.documentElement);
+    
+    try {
+        const selection = getHTMLOfSelection();
+        console.log('🔧 [MarkDownload] 🔥 CONTENTSCRIPT: selection length:', selection ? selection.length : 'N/A');
+        
+        const dom = getHTMLOfDocument();
+        console.log('🔧 [MarkDownload] 🔥 CONTENTSCRIPT: dom length:', dom ? dom.length : 'N/A');
+        
+        const result = {
+            selection: selection,
+            dom: dom
+        };
+        
+        console.log('🔧 [MarkDownload] 🔥 CONTENTSCRIPT: Returning result:', {
+            hasSelection: !!result.selection,
+            hasDom: !!result.dom,
+            selectionLength: result.selection ? result.selection.length : 'N/A',
+            domLength: result.dom ? result.dom.length : 'N/A'
+        });
+        
+        return result;
+    } catch (error) {
+        console.error('🔧 [MarkDownload] 🔥 CONTENTSCRIPT: Error in getSelectionAndDom():', error);
+        throw error;
     }
 }
 

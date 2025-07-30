@@ -1,13 +1,122 @@
+// Import required scripts for service worker
+importScripts(
+  '/browser-polyfill.min.js',
+  '/background/mv3-adapter.js',
+  '/background/apache-mime-types.js',
+  '/background/moment.min.js',
+  '/background/turndown.js',
+  '/background/turndown-plugin-gfm.js',
+  '/background/Readability.js',
+  '/shared/context-menus.js',
+  '/shared/default-options.js'
+);
+
+console.log('🔧 [MarkDownload] Background script loaded');
+
 // log some info
 browser.runtime.getPlatformInfo().then(async platformInfo => {
   const browserInfo = browser.runtime.getBrowserInfo ? await browser.runtime.getBrowserInfo() : "Can't get browser info"
-  console.info(platformInfo, browserInfo);
+  console.info('🔧 [MarkDownload] Platform info:', platformInfo, browserInfo);
 });
 
-// add notification listener for foreground page messages
-browser.runtime.onMessage.addListener(notify);
-// create context menus
-createMenus()
+console.log('🔧 [MarkDownload] Setting up unified message listener...');
+// Unified message listener for all types
+browser.runtime.onMessage.addListener(async (message, sender) => {
+  console.log('🔧 [MarkDownload] Background: Received message:', message.type, message);
+  
+  // Handle executeScript requests from popup
+  if (message.type === 'executeScript') {
+    console.log('🔧 [MarkDownload] Background: Processing executeScript request');
+    try {
+      let results;
+      if (message.details.code) {
+        console.log('🔧 [MarkDownload] Background: Executing code:', message.details.code);
+        // Execute code directly in the page context using func
+        results = await chrome.scripting.executeScript({
+          target: { tabId: message.tabId },
+          func: () => {
+            console.log('🔧 [MarkDownload] 🔥 BACKGROUND: Starting page context execution');
+            console.log('🔧 [MarkDownload] 🔥 BACKGROUND: Current context:', typeof window, typeof document);
+            console.log('🔧 [MarkDownload] 🔥 BACKGROUND: window.location:', window.location.href);
+            
+            try {
+              console.log('🔧 [MarkDownload] 🔥 BACKGROUND: Step 1 - Basic checks');
+              console.log('🔧 [MarkDownload] 🔥 BACKGROUND: document exists:', !!document);
+              console.log('🔧 [MarkDownload] 🔥 BACKGROUND: document.readyState:', document.readyState);
+              console.log('🔧 [MarkDownload] 🔥 BACKGROUND: document.body exists:', !!document.body);
+              console.log('🔧 [MarkDownload] 🔥 BACKGROUND: document.documentElement exists:', !!document.documentElement);
+              
+              console.log('🔧 [MarkDownload] 🔥 BACKGROUND: Step 2 - Testing DOM access');
+              const bodyElement = document.querySelector('body');
+              console.log('🔧 [MarkDownload] 🔥 BACKGROUND: bodyElement exists:', !!bodyElement);
+              
+              console.log('🔧 [MarkDownload] 🔥 BACKGROUND: Step 3 - Getting HTML');
+              const testHTML = document.documentElement.outerHTML;
+              console.log('🔧 [MarkDownload] 🔥 BACKGROUND: HTML length:', testHTML ? testHTML.length : 'N/A');
+              console.log('🔧 [MarkDownload] 🔥 BACKGROUND: HTML preview:', testHTML ? testHTML.substring(0, 200) + '...' : 'N/A');
+              
+              console.log('🔧 [MarkDownload] 🔥 BACKGROUND: Step 4 - Creating result object');
+              const result = {
+                selection: '',
+                dom: testHTML || '',
+                success: true,
+                timestamp: new Date().toISOString()
+              };
+              
+              console.log('🔧 [MarkDownload] 🔥 BACKGROUND: Step 5 - Final result:', {
+                hasSelection: !!result.selection,
+                hasDom: !!result.dom,
+                domLength: result.dom ? result.dom.length : 'N/A',
+                success: result.success
+              });
+              
+              console.log('🔧 [MarkDownload] 🔥 BACKGROUND: ===== RETURNING RESULT =====');
+              return result;
+              
+            } catch (error) {
+              console.error('🔧 [MarkDownload] 🔥 BACKGROUND: ===== ERROR OCCURRED =====');
+              console.error('🔧 [MarkDownload] 🔥 BACKGROUND: Error message:', error.message);
+              console.error('🔧 [MarkDownload] 🔥 BACKGROUND: Error stack:', error.stack);
+              console.error('🔧 [MarkDownload] 🔥 BACKGROUND: Error type:', error.constructor.name);
+              
+              return { 
+                error: error.message, 
+                stack: error.stack,
+                success: false,
+                timestamp: new Date().toISOString()
+              };
+            }
+          }
+        });
+      } else if (message.details.file) {
+        console.log('🔧 [MarkDownload] Background: Executing file:', message.details.file);
+        results = await chrome.scripting.executeScript({
+          target: { tabId: message.tabId },
+          files: [message.details.file]
+        });
+      }
+      // Convert MV3 result format to MV2 format
+      const convertedResults = results ? results.map(result => result.result) : [];
+      console.log('🔧 [MarkDownload] Background: Script execution successful, results:', convertedResults);
+      return { results: convertedResults };
+    } catch (error) {
+      console.error('❌ [MarkDownload] Background: Script execution failed:', error);
+      return { error: error.message };
+    }
+  }
+  
+  // Handle other message types (clip, download, etc.)
+  else {
+    console.log('🔧 [MarkDownload] Background: Delegating to notify function for:', message.type);
+    const result = await notify(message);
+    console.log('🔧 [MarkDownload] Background: notify function result:', result);
+    return result;
+  }
+});
+  
+  // create context menus
+  console.log('🔧 [MarkDownload] Creating context menus...');
+  createMenus()
 
 TurndownService.prototype.defaultEscape = TurndownService.prototype.escape;
 
@@ -318,9 +427,19 @@ function textReplace(string, article, disallowedChars = null) {
 
 // function to convert an article info object into markdown
 async function convertArticleToMarkdown(article, downloadImages = null) {
+  console.log('🔧 [MarkDownload] convertArticleToMarkdown: Starting conversion');
+  console.log('🔧 [MarkDownload] convertArticleToMarkdown: Input article:', {
+    title: article.title,
+    hasContent: !!article.content,
+    contentLength: article.content ? article.content.length : 'N/A'
+  });
+  
   const options = await getOptions();
+  console.log('🔧 [MarkDownload] convertArticleToMarkdown: Got options:', Object.keys(options));
+  
   if (downloadImages != null) {
     options.downloadImages = downloadImages;
+    console.log('🔧 [MarkDownload] convertArticleToMarkdown: Override downloadImages to:', downloadImages);
   }
 
   // substitute front and backmatter templates if necessary
@@ -335,11 +454,24 @@ async function convertArticleToMarkdown(article, downloadImages = null) {
   options.imagePrefix = textReplace(options.imagePrefix, article, options.disallowedChars)
     .split('/').map(s=>generateValidFileName(s, options.disallowedChars)).join('/');
 
+  console.log('🔧 [MarkDownload] convertArticleToMarkdown: Calling turndown function...');
   let result = turndown(article.content, options, article);
+  console.log('🔧 [MarkDownload] convertArticleToMarkdown: Turndown complete');
+  console.log('🔧 [MarkDownload] convertArticleToMarkdown: Turndown result:', {
+    hasMarkdown: !!result.markdown,
+    markdownLength: result.markdown ? result.markdown.length : 'N/A',
+    imageCount: result.imageList ? Object.keys(result.imageList).length : 'N/A',
+    markdownPreview: result.markdown ? result.markdown.substring(0, 100) + '...' : 'N/A'
+  });
+  
   if (options.downloadImages && options.downloadMode == 'downloadsApi') {
+    console.log('🔧 [MarkDownload] convertArticleToMarkdown: Pre-downloading images...');
     // pre-download the images
     result = await preDownloadImages(result.imageList, result.markdown);
+    console.log('🔧 [MarkDownload] convertArticleToMarkdown: Images pre-download complete');
   }
+  
+  console.log('🔧 [MarkDownload] convertArticleToMarkdown: Final result ready');
   return result;
 }
 
@@ -534,32 +666,99 @@ function base64EncodeUnicode(str) {
 
 //function that handles messages from the injected script into the site
 async function notify(message) {
+  console.log('🔧 [MarkDownload] Background: notify called with message:', message.type, message);
   const options = await this.getOptions();
+  console.log('🔧 [MarkDownload] Background: Got options in notify');
   // message for initial clipping of the dom
   if (message.type == "clip") {
-    // get the article info from the passed in dom
-    const article = await getArticleFromDom(message.dom);
-
-    // if selection info was passed in (and we're to clip the selection)
-    // replace the article content
-    if (message.selection && message.clipSelection) {
-      article.content = message.selection;
+    console.log('🔧 [MarkDownload] Background: Processing clip message');
+    console.log('🔧 [MarkDownload] Background: Clip message details:', {
+      hasDOM: !!message.dom,
+      domLength: message.dom ? message.dom.length : 'N/A',
+      hasSelection: !!message.selection,
+      clipSelection: message.clipSelection,
+      messageKeys: Object.keys(message)
+    });
+    
+    if (!message.dom) {
+      console.error('❌ [MarkDownload] Background: No DOM content in clip message');
+      return { error: 'No DOM content provided' };
     }
     
-    // convert the article to markdown
-    const { markdown, imageList } = await convertArticleToMarkdown(article);
+    try {
+      // get the article info from the passed in dom
+      console.log('🔧 [MarkDownload] Background: Calling getArticleFromDom...');
+      const article = await getArticleFromDom(message.dom);
+      console.log('🔧 [MarkDownload] Background: Article extracted successfully');
+      console.log('🔧 [MarkDownload] Background: Article details:', {
+        title: article.title,
+        hasContent: !!article.content,
+        contentLength: article.content ? article.content.length : 'N/A',
+        baseURI: article.baseURI
+      });
 
-    // format the title
-    article.title = await formatTitle(article);
+      // if selection info was passed in (and we're to clip the selection)
+      // replace the article content
+      if (message.selection && message.clipSelection) {
+        console.log('🔧 [MarkDownload] Background: Using selection content instead of full article');
+        console.log('🔧 [MarkDownload] Background: Selection length:', message.selection.length);
+        article.content = message.selection;
+      }
+      
+      // convert the article to markdown
+      console.log('🔧 [MarkDownload] Background: Converting to markdown...');
+      console.log('🔧 [MarkDownload] Background: Article content length before conversion:', article.content ? article.content.length : 'N/A');
+      const { markdown, imageList } = await convertArticleToMarkdown(article);
+      console.log('🔧 [MarkDownload] Background: Markdown conversion complete');
+      console.log('🔧 [MarkDownload] Background: Markdown details:', {
+        markdownLength: markdown ? markdown.length : 'N/A',
+        imageCount: imageList ? Object.keys(imageList).length : 'N/A',
+        markdownPreview: markdown ? markdown.substring(0, 200) + '...' : 'N/A'
+      });
 
-    // format the mdClipsFolder
-    const mdClipsFolder = await formatMdClipsFolder(article);
+      // format the title
+      const originalTitle = article.title;
+      article.title = await formatTitle(article);
+      console.log('🔧 [MarkDownload] Background: Title formatting:', {
+        original: originalTitle,
+        formatted: article.title
+      });
 
-    // display the data in the popup
-    await browser.runtime.sendMessage({ type: "display.md", markdown: markdown, article: article, imageList: imageList, mdClipsFolder: mdClipsFolder});
+      // format the mdClipsFolder
+      const mdClipsFolder = await formatMdClipsFolder(article);
+      console.log('🔧 [MarkDownload] Background: mdClipsFolder:', mdClipsFolder);
+
+      // display the data in the popup
+      const displayMessage = { 
+        type: "display.md", 
+        markdown: markdown, 
+        article: article, 
+        imageList: imageList, 
+        mdClipsFolder: mdClipsFolder
+      };
+      console.log('🔧 [MarkDownload] Background: Preparing display.md message');
+      console.log('🔧 [MarkDownload] Background: Display message details:', {
+        type: displayMessage.type,
+        hasMarkdown: !!displayMessage.markdown,
+        markdownLength: displayMessage.markdown ? displayMessage.markdown.length : 'N/A',
+        hasArticle: !!displayMessage.article,
+        articleTitle: displayMessage.article ? displayMessage.article.title : 'N/A'
+      });
+      
+      console.log('🔧 [MarkDownload] Background: Sending display.md message to popup...');
+      const sendResult = await browser.runtime.sendMessage(displayMessage);
+      console.log('🔧 [MarkDownload] Background: display.md message sent, result:', sendResult);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('❌ [MarkDownload] Background: Error in clip processing:', error);
+      console.error('❌ [MarkDownload] Background: Error stack:', error.stack);
+      return { error: error.message };
+    }
   }
   // message for triggering download
   else if (message.type == "download") {
+    console.log('🔧 [MarkDownload] Background: Processing download message');
     downloadMarkdown(message.markdown, message.title, message.tab.id, message.imageList, message.mdClipsFolder);
   }
 }
@@ -672,13 +871,53 @@ async function ensureScripts(tabId) {
 
 // get Readability article info from the dom passed in
 async function getArticleFromDom(domString) {
-  // parse the dom
-  const parser = new DOMParser();
-  const dom = parser.parseFromString(domString, "text/html");
+  console.log('🔧 [MarkDownload] getArticleFromDom: Starting DOM processing');
+  console.log('🔧 [MarkDownload] getArticleFromDom: DOM string length:', domString ? domString.length : 'N/A');
+  
+  if (!domString) {
+    console.error('❌ [MarkDownload] getArticleFromDom: Empty DOM string provided');
+    throw new Error('Empty DOM string provided');
+  }
+  
+  // parse the dom - use a polyfill for Service Worker environment
+  let dom;
+  try {
+    if (typeof DOMParser !== 'undefined') {
+      const parser = new DOMParser();
+      dom = parser.parseFromString(domString, "text/html");
+    } else {
+      // Fallback for Service Worker environment
+      console.log('🔧 [MarkDownload] getArticleFromDom: Using fallback DOM parsing for Service Worker');
+      // Create a simple DOM-like structure
+      dom = {
+        documentElement: {
+          nodeName: "HTML",
+          removeAttribute: () => {},
+          querySelector: () => null,
+          querySelectorAll: () => []
+        },
+        body: {
+          innerHTML: domString,
+          querySelector: () => null,
+          querySelectorAll: () => []
+        },
+        title: "Extracted Content"
+      };
+    }
+  } catch (error) {
+    console.error('❌ [MarkDownload] getArticleFromDom: Error parsing DOM:', error);
+    throw new Error('DOM parsing failed: ' + error.message);
+  }
 
   if (dom.documentElement.nodeName == "parsererror") {
-    console.error("error while parsing");
+    console.error("❌ [MarkDownload] getArticleFromDom: Error while parsing DOM");
+    console.error("❌ [MarkDownload] getArticleFromDom: Parser error details:", dom.documentElement.textContent);
+    throw new Error('DOM parsing failed');
   }
+  
+  console.log('🔧 [MarkDownload] getArticleFromDom: DOM parsed successfully');
+  console.log('🔧 [MarkDownload] getArticleFromDom: Document title:', dom.title);
+  console.log('🔧 [MarkDownload] getArticleFromDom: Body content length:', dom.body ? dom.body.innerHTML.length : 'N/A');
 
   const math = {};
 
@@ -757,7 +996,52 @@ async function getArticleFromDom(domString) {
   dom.documentElement.removeAttribute('class')
 
   // simplify the dom into an article
-  const article = new Readability(dom).parse();
+  console.log('🔧 [MarkDownload] getArticleFromDom: Starting Readability processing...');
+  
+  let article;
+  try {
+    if (typeof Readability !== 'undefined' && dom.documentElement && dom.body) {
+      article = new Readability(dom).parse();
+    } else {
+      // Fallback for Service Worker environment
+      console.log('🔧 [MarkDownload] getArticleFromDom: Using fallback article creation for Service Worker');
+      article = {
+        title: dom.title || "Extracted Content",
+        content: dom.body ? dom.body.innerHTML : domString,
+        textContent: dom.body ? dom.body.textContent || "" : "",
+        length: domString.length,
+        excerpt: "",
+        byline: "",
+        siteName: ""
+      };
+    }
+  } catch (error) {
+    console.error('❌ [MarkDownload] getArticleFromDom: Error in Readability processing:', error);
+    // Create a basic article from the DOM string
+    article = {
+      title: "Extracted Content",
+      content: domString,
+      textContent: "",
+      length: domString.length,
+      excerpt: "",
+      byline: "",
+      siteName: ""
+    };
+  }
+  
+  if (!article) {
+    console.error('❌ [MarkDownload] getArticleFromDom: Readability failed to parse article');
+    throw new Error('Readability failed to parse article');
+  }
+  
+  console.log('🔧 [MarkDownload] getArticleFromDom: Readability processing complete');
+  console.log('🔧 [MarkDownload] getArticleFromDom: Readability results:', {
+    title: article.title,
+    hasContent: !!article.content,
+    contentLength: article.content ? article.content.length : 'N/A',
+    excerpt: article.excerpt,
+    byline: article.byline
+  });
 
   // get the base uri from the dom and attach it as important article info
   article.baseURI = dom.baseURI;
@@ -791,6 +1075,17 @@ async function getArticleFromDom(domString) {
   }
 
   article.math = math
+
+  console.log('🔧 [MarkDownload] getArticleFromDom: Final article object ready');
+  console.log('🔧 [MarkDownload] getArticleFromDom: Final article details:', {
+    title: article.title,
+    pageTitle: article.pageTitle,
+    hasContent: !!article.content,
+    contentLength: article.content ? article.content.length : 'N/A',
+    baseURI: article.baseURI,
+    hasKeywords: !!article.keywords,
+    keywordCount: article.keywords ? article.keywords.length : 'N/A'
+  });
 
   // return the article
   return article;
