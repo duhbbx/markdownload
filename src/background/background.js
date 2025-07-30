@@ -122,6 +122,357 @@ TurndownService.prototype.defaultEscape = TurndownService.prototype.escape;
 
 // function to convert the article content to markdown using Turndown
 function turndown(content, options, article) {
+  console.log('═══════════════════ TURNDOWN CONVERSION START ═══════════════════');
+  console.log('📥 [TURNDOWN INPUT] Content length:', content ? content.length : 'N/A');
+  console.log('📥 [TURNDOWN INPUT] Content type:', typeof content);
+  console.log('📥 [TURNDOWN INPUT] Content preview:', content ? content.substring(0, 300) + '...' : 'N/A');
+  console.log('📥 [TURNDOWN INPUT] Is HTML document?', content ? content.includes('<html') : false);
+  console.log('📥 [TURNDOWN INPUT] Has headings?', content ? content.includes('<h') : false);
+  console.log('📥 [TURNDOWN INPUT] Has paragraphs?', content ? content.includes('<p>') : false);
+  
+  // Clean up content for better turndown processing
+  if (content && content.includes('<html')) {
+    const bodyMatch = content.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    if (bodyMatch) {
+      console.log('🔄 [TURNDOWN PROCESSING] Extracted body from HTML document, length:', bodyMatch[1].length);
+      content = bodyMatch[1];
+    } else {
+      console.log('🔄 [TURNDOWN PROCESSING] No body tag found, using full content');
+    }
+  }
+  
+  console.log('🔄 [TURNDOWN PROCESSING] After cleanup - Content length:', content ? content.length : 'N/A');
+  console.log('🔄 [TURNDOWN PROCESSING] After cleanup - Content preview:', content ? content.substring(0, 300) + '...' : 'N/A');
+  console.log('🔄 [TURNDOWN PROCESSING] Final content has headings?', content ? content.includes('<h') : false);
+  console.log('🔄 [TURNDOWN PROCESSING] Final content has paragraphs?', content ? content.includes('<p>') : false);
+  
+  // Create document polyfill for Service Worker environment
+  if (typeof document === 'undefined') {
+    console.log('🔧 [MarkDownload] turndown: Creating document polyfill for Service Worker');
+    
+    // Create a comprehensive document polyfill
+    const createMockElement = (tagName, id = null, innerHTML = '') => {
+      const element = {
+        nodeName: tagName.toUpperCase(),
+        tagName: tagName.toUpperCase(),
+        id: id || '',
+        innerHTML: innerHTML || '',
+        textContent: (innerHTML || '').replace(/<[^>]*>/g, ''),
+        className: '',
+        attributes: {},
+        childNodes: [],
+        parentNode: null,
+        nextSibling: null,
+        previousSibling: null,
+        nodeType: 1, // ELEMENT_NODE
+        nodeValue: null,
+        style: {},
+        
+        // DOM properties
+        get children() {
+          // Return only element nodes (nodeType === 1), not text nodes
+          return this.childNodes.filter(child => child.nodeType === 1);
+        },
+        
+        get firstElementChild() {
+          const elementChildren = this.children;
+          return elementChildren.length > 0 ? elementChildren[0] : null;
+        },
+        
+        get lastElementChild() {
+          const elementChildren = this.children;
+          return elementChildren.length > 0 ? elementChildren[elementChildren.length - 1] : null;
+        },
+        
+        get nextElementSibling() {
+          if (!this.parentNode) return null;
+          const siblings = this.parentNode.children;
+          const index = siblings.indexOf(this);
+          return index >= 0 && index < siblings.length - 1 ? siblings[index + 1] : null;
+        },
+        
+        get previousElementSibling() {
+          if (!this.parentNode) return null;
+          const siblings = this.parentNode.children;
+          const index = siblings.indexOf(this);
+          return index > 0 ? siblings[index - 1] : null;
+        },
+        
+        appendChild: function(child) {
+          this.childNodes.push(child);
+          child.parentNode = this;
+          return child;
+        },
+        removeChild: function(child) {
+          const index = this.childNodes.indexOf(child);
+          if (index > -1) {
+            this.childNodes.splice(index, 1);
+            child.parentNode = null;
+          }
+          return child;
+        },
+        setAttribute: function(name, value) {
+          this.attributes[name] = value;
+          if (name === 'id') this.id = value;
+          if (name === 'class') this.className = value;
+        },
+        getAttribute: function(name) {
+          return this.attributes[name] || null;
+        },
+        hasAttribute: function(name) {
+          return name in this.attributes;
+        },
+        removeAttribute: function(name) {
+          delete this.attributes[name];
+          if (name === 'id') this.id = '';
+          if (name === 'class') this.className = '';
+        },
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        getElementsByTagName: () => [],
+        cloneNode: function(deep) {
+          const clone = createMockElement(this.tagName, this.id, this.innerHTML);
+          clone.className = this.className;
+          clone.attributes = { ...this.attributes };
+          if (deep && this.childNodes) {
+            this.childNodes.forEach(child => {
+              clone.appendChild(child.cloneNode(true));
+            });
+          }
+          return clone;
+        }
+      };
+      return element;
+    };
+
+    // Create a mock document that will be returned by createHTMLDocument
+    const createMockDocument = (title) => {
+      let htmlContent = '';
+      let parsedElements = {};
+      
+      const mockDoc = {
+        title: title || '',
+        documentElement: createMockElement('HTML'),
+        body: createMockElement('BODY'),
+        head: createMockElement('HEAD'),
+        createElement: (tagName) => createMockElement(tagName),
+        createTextNode: (text) => ({
+          nodeType: 3,
+          nodeName: '#text',
+          textContent: text,
+          nodeValue: text,
+          parentNode: null
+        }),
+        getElementById: function(id) {
+          console.log('🔧 [MarkDownload] mockDoc.getElementById called with:', id);
+          if (id === 'turndown-root') {
+            if (!parsedElements[id]) {
+              // Create element with the HTML content that was written
+              const element = createMockElement('x-turndown', id, htmlContent);
+              
+              // Parse HTML content and create proper DOM structure for turndown to traverse
+              if (htmlContent) {
+                console.log('🔧 [MarkDownload] Parsing HTML content for turndown-root...');
+                try {
+                  // Parse and create actual DOM elements from HTML content
+                  element.childNodes = [];
+                  
+                  // Helper function to parse HTML and create DOM structure
+                  const parseHTMLContent = (content) => {
+                    // Create elements for common HTML tags that turndown needs to recognize
+                    const createElementFromMatch = (tagName, content, attributes = {}) => {
+                      const elem = createMockElement(tagName, attributes.id, content);
+                      if (attributes.class) elem.className = attributes.class;
+                      elem.parentNode = element;
+                      
+                      // For elements with nested content, try to parse inner HTML too
+                      if (content && content.includes('<')) {
+                        const innerText = content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                        if (innerText) {
+                          const textNode = {
+                            nodeType: 3,
+                            nodeName: '#text',
+                            nodeValue: innerText,
+                            textContent: innerText,
+                            parentNode: elem
+                          };
+                          elem.childNodes.push(textNode);
+                        }
+                      } else if (content) {
+                        const textNode = {
+                          nodeType: 3,
+                          nodeName: '#text',
+                          nodeValue: content,
+                          textContent: content,
+                          parentNode: elem
+                        };
+                        elem.childNodes.push(textNode);
+                      }
+                      return elem;
+                    };
+
+                    // Parse headings
+                    const headingPattern = /<(h[1-6])[^>]*>(.*?)<\/h[1-6]>/gi;
+                    let match;
+                    while ((match = headingPattern.exec(content)) !== null) {
+                      const headingLevel = match[1].toUpperCase();
+                      const headingContent = match[2].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                      if (headingContent) {
+                        element.childNodes.push(createElementFromMatch(headingLevel, headingContent));
+                      }
+                    }
+
+                    // Parse paragraphs
+                    const paragraphPattern = /<p[^>]*>(.*?)<\/p>/gi;
+                    while ((match = paragraphPattern.exec(content)) !== null) {
+                      const pContent = match[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                      if (pContent) {
+                        element.childNodes.push(createElementFromMatch('P', pContent));
+                      }
+                    }
+
+                    // Parse strong/bold elements
+                    const strongPattern = /<(strong|b)[^>]*>(.*?)<\/(strong|b)>/gi;
+                    while ((match = strongPattern.exec(content)) !== null) {
+                      const strongContent = match[2].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                      if (strongContent) {
+                        element.childNodes.push(createElementFromMatch('STRONG', strongContent));
+                      }
+                    }
+
+                    // Parse links
+                    const linkPattern = /<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi;
+                    while ((match = linkPattern.exec(content)) !== null) {
+                      const href = match[1];
+                      const linkText = match[2].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                      if (linkText) {
+                        const linkElem = createElementFromMatch('A', linkText);
+                        linkElem.setAttribute('href', href);
+                        element.childNodes.push(linkElem);
+                      }
+                    }
+
+                    // Parse lists
+                    const ulPattern = /<ul[^>]*>(.*?)<\/ul>/gi;
+                    while ((match = ulPattern.exec(content)) !== null) {
+                      const ulElem = createElementFromMatch('UL', '');
+                      const liPattern = /<li[^>]*>(.*?)<\/li>/gi;
+                      let liMatch;
+                      while ((liMatch = liPattern.exec(match[1])) !== null) {
+                        const liContent = liMatch[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                        if (liContent) {
+                          const liElem = createElementFromMatch('LI', liContent);
+                          liElem.parentNode = ulElem;
+                          ulElem.childNodes.push(liElem);
+                        }
+                      }
+                      if (ulElem.childNodes.length > 0) {
+                        element.childNodes.push(ulElem);
+                      }
+                    }
+
+                    // If no specific elements were parsed, create basic text nodes from remaining content
+                    if (element.childNodes.length === 0) {
+                      const cleanText = content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                      if (cleanText) {
+                        // Split into paragraphs and create P elements
+                        const paragraphs = cleanText.split(/\n\s*\n/).filter(p => p.trim());
+                        paragraphs.forEach(para => {
+                          if (para.trim()) {
+                            element.childNodes.push(createElementFromMatch('P', para.trim()));
+                          }
+                        });
+                      }
+                    }
+                  };
+
+                  parseHTMLContent(htmlContent);
+                  console.log('🔧 [MarkDownload] Created', element.childNodes.length, 'child elements for turndown-root');
+                  
+                } catch (parseError) {
+                  console.error('🔧 [MarkDownload] Error parsing HTML for turndown-root:', parseError);
+                  // Fallback: create basic text content
+                  const textContent = htmlContent.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+                  if (textContent) {
+                    const textNode = {
+                      nodeType: 3,
+                      nodeName: '#text',
+                      nodeValue: textContent,
+                      textContent: textContent,
+                      parentNode: element
+                    };
+                    element.childNodes.push(textNode);
+                  }
+                }
+              }
+              
+              parsedElements[id] = element;
+              console.log('🔧 [MarkDownload] Created turndown-root element with content length:', htmlContent.length);
+              console.log('🔧 [MarkDownload] turndown-root element structure:', {
+                nodeName: element.nodeName,
+                id: element.id,
+                innerHTML: element.innerHTML.substring(0, 200) + '...',
+                textContent: element.textContent.substring(0, 200) + '...',
+                childNodes: element.childNodes.length,
+                children: element.children.length
+              });
+            } else {
+              console.log('🔧 [MarkDownload] Returning existing turndown-root element');
+            }
+            return parsedElements[id];
+          }
+          return null;
+        },
+        open: function() {
+          console.log('🔧 [MarkDownload] mockDoc.open() called');
+          htmlContent = '';
+        },
+        write: function(string) {
+          console.log('🔧 [MarkDownload] mockDoc.write() called with length:', string ? string.length : 'N/A');
+          htmlContent += string;
+        },
+        close: function() {
+          console.log('🔧 [MarkDownload] mockDoc.close() called, final content length:', htmlContent.length);
+          // Update any existing turndown-root element
+          if (parsedElements['turndown-root']) {
+            parsedElements['turndown-root'].innerHTML = htmlContent;
+            parsedElements['turndown-root'].textContent = htmlContent.replace(/<[^>]*>/g, '');
+          }
+        },
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        getElementsByTagName: () => []
+      };
+      
+      return mockDoc;
+    };
+
+    globalThis.document = {
+      implementation: {
+        createHTMLDocument: createMockDocument
+      },
+      createElement: (tagName) => createMockElement(tagName),
+      getElementById: () => null,
+      querySelector: () => null,
+      querySelectorAll: () => []
+    };
+
+    // Also create a global DOMParser for turndown
+    if (typeof globalThis.DOMParser === 'undefined') {
+      globalThis.DOMParser = function() {
+        this.parseFromString = function(string, mimeType) {
+          console.log('🔧 [MarkDownload] DOMParser.parseFromString called with string length:', string ? string.length : 'N/A');
+          console.log('🔧 [MarkDownload] DOMParser.parseFromString mimeType:', mimeType);
+          
+          const doc = createMockDocument('');
+          doc.open();
+          doc.write(string);
+          doc.close();
+          return doc;
+        };
+      };
+    }
+  }
 
   if (options.turndownEscape) TurndownService.prototype.escape = TurndownService.prototype.defaultEscape;
   else TurndownService.prototype.escape = s => s;
@@ -304,12 +655,64 @@ function turndown(content, options, article) {
     }
   });
 
-  let markdown = options.frontmatter + turndownService.turndown(content)
-      + options.backmatter;
+  console.log('🚀 [TURNDOWN EXECUTION] Calling turndownService.turndown()...');
+  console.log('🚀 [TURNDOWN EXECUTION] TurndownService type:', typeof turndownService);
+  console.log('🚀 [TURNDOWN EXECUTION] TurndownService.turndown type:', typeof turndownService.turndown);
+  console.log('🚀 [TURNDOWN EXECUTION] Input to turndownService:', content.substring(0, 500) + '...');
+  
+  let rawMarkdown;
+  try {
+    rawMarkdown = turndownService.turndown(content);
+    
+    console.log('📤 [TURNDOWN OUTPUT] Raw markdown returned');
+    console.log('📤 [TURNDOWN OUTPUT] Raw markdown type:', typeof rawMarkdown);
+    console.log('📤 [TURNDOWN OUTPUT] Raw markdown length:', rawMarkdown ? rawMarkdown.length : 'N/A');
+    console.log('📤 [TURNDOWN OUTPUT] Raw markdown is empty?', rawMarkdown === '');
+    
+    if (rawMarkdown && rawMarkdown.length > 0) {
+      console.log('📤 [TURNDOWN OUTPUT] Raw markdown preview:', rawMarkdown.substring(0, 300) + '...');
+      console.log('📤 [TURNDOWN OUTPUT] Raw markdown has headers?', rawMarkdown.includes('#'));
+      console.log('📤 [TURNDOWN OUTPUT] Raw markdown has bold?', rawMarkdown.includes('**'));
+      console.log('📤 [TURNDOWN OUTPUT] Raw markdown has links?', rawMarkdown.includes('['));
+    } else {
+      console.log('⚠️ [TURNDOWN OUTPUT] Raw markdown is empty - running diagnostic test...');
+      
+      // Try with simple HTML to test turndown
+      const testHTML = '<h1>Test Header</h1><p>Test paragraph with <strong>bold</strong> text.</p>';
+      const testResult = turndownService.turndown(testHTML);
+      console.log('🧪 [TURNDOWN TEST] Simple test input:', testHTML);
+      console.log('🧪 [TURNDOWN TEST] Simple test output:', testResult);
+      
+      // Check if turndown service is properly configured
+      console.log('🔍 [TURNDOWN DEBUG] globalThis.document exists?', typeof globalThis.document !== 'undefined');
+      console.log('🔍 [TURNDOWN DEBUG] DOMParser exists?', typeof globalThis.DOMParser !== 'undefined');
+      console.log('🔍 [TURNDOWN DEBUG] TurndownService options:', turndownService.options);
+      console.log('🔍 [TURNDOWN DEBUG] TurndownService rules count:', Object.keys(turndownService.rules).length);
+    }
+  } catch (error) {
+    console.error('❌ [TURNDOWN ERROR] Error in turndownService.turndown():', error);
+    console.error('❌ [TURNDOWN ERROR] Error stack:', error.stack);
+    rawMarkdown = '';
+  }
+  
+  console.log('🔄 [FINAL PROCESSING] Adding frontmatter and backmatter...');
+  console.log('🔄 [FINAL PROCESSING] Frontmatter length:', options.frontmatter ? options.frontmatter.length : 0);
+  console.log('🔄 [FINAL PROCESSING] Backmatter length:', options.backmatter ? options.backmatter.length : 0);
+  
+  let markdown = options.frontmatter + rawMarkdown + options.backmatter;
 
   // strip out non-printing special characters which CodeMirror displays as a red dot
   // see: https://codemirror.net/doc/manual.html#option_specialChars
   markdown = markdown.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028\u2029\ufeff\ufff9-\ufffc]/g, '');
+  
+  console.log('✅ [FINAL OUTPUT] Markdown processing complete');
+  console.log('✅ [FINAL OUTPUT] Final markdown length:', markdown ? markdown.length : 'N/A');
+  console.log('✅ [FINAL OUTPUT] Final markdown preview:', markdown ? markdown.substring(0, 400) + '...' : 'N/A');
+  console.log('✅ [FINAL OUTPUT] Final markdown has headers?', markdown ? markdown.includes('#') : false);
+  console.log('✅ [FINAL OUTPUT] Final markdown has bold?', markdown ? markdown.includes('**') : false);
+  console.log('✅ [FINAL OUTPUT] Final markdown has links?', markdown ? markdown.includes('[') : false);
+  console.log('✅ [FINAL OUTPUT] Image list count:', imageList ? Object.keys(imageList).length : 0);
+  console.log('═══════════════════ TURNDOWN CONVERSION END ═══════════════════');
   
   return { markdown: markdown, imageList: imageList };
 }
@@ -454,15 +857,19 @@ async function convertArticleToMarkdown(article, downloadImages = null) {
   options.imagePrefix = textReplace(options.imagePrefix, article, options.disallowedChars)
     .split('/').map(s=>generateValidFileName(s, options.disallowedChars)).join('/');
 
-  console.log('🔧 [MarkDownload] convertArticleToMarkdown: Calling turndown function...');
+  console.log('🎯 [MAIN CONVERSION] Starting turndown conversion...');
+  console.log('🎯 [MAIN CONVERSION] Article content being sent to turndown:');
+  console.log('🎯 [MAIN CONVERSION] - Content length:', article.content ? article.content.length : 'N/A');
+  console.log('🎯 [MAIN CONVERSION] - Content preview:', article.content ? article.content.substring(0, 200) + '...' : 'N/A');
+  
   let result = turndown(article.content, options, article);
-  console.log('🔧 [MarkDownload] convertArticleToMarkdown: Turndown complete');
-  console.log('🔧 [MarkDownload] convertArticleToMarkdown: Turndown result:', {
-    hasMarkdown: !!result.markdown,
-    markdownLength: result.markdown ? result.markdown.length : 'N/A',
-    imageCount: result.imageList ? Object.keys(result.imageList).length : 'N/A',
-    markdownPreview: result.markdown ? result.markdown.substring(0, 100) + '...' : 'N/A'
-  });
+  
+  console.log('🎯 [MAIN CONVERSION] Turndown conversion completed!');
+  console.log('🎯 [MAIN CONVERSION] Conversion results summary:');
+  console.log('🎯 [MAIN CONVERSION] - Has markdown:', !!result.markdown);
+  console.log('🎯 [MAIN CONVERSION] - Markdown length:', result.markdown ? result.markdown.length : 'N/A');
+  console.log('🎯 [MAIN CONVERSION] - Image count:', result.imageList ? Object.keys(result.imageList).length : 'N/A');
+  console.log('🎯 [MAIN CONVERSION] - Markdown preview:', result.markdown ? result.markdown.substring(0, 200) + '...' : 'N/A');
   
   if (options.downloadImages && options.downloadMode == 'downloadsApi') {
     console.log('🔧 [MarkDownload] convertArticleToMarkdown: Pre-downloading images...');
@@ -888,20 +1295,231 @@ async function getArticleFromDom(domString) {
     } else {
       // Fallback for Service Worker environment
       console.log('🔧 [MarkDownload] getArticleFromDom: Using fallback DOM parsing for Service Worker');
+      console.log('🔧 [MarkDownload] DOM content length:', domString.length);
       // Create a simple DOM-like structure
+      const createMockElementList = (tagName) => {
+        // Return a basic array-like object for getElementsByTagName
+        if (tagName.toLowerCase() === 'noscript') {
+          return []; // Return empty array for noscript elements
+        }
+        return [];
+      };
+
+      // Enhanced mock element creator with more DOM methods
+      const createMockElement = (tagName, innerHTML = '') => {
+        const element = {
+          nodeName: tagName.toUpperCase(),
+          tagName: tagName.toUpperCase(),
+          nodeType: 1, // ELEMENT_NODE
+          innerHTML: innerHTML,
+          textContent: innerHTML.replace(/<[^>]*>/g, ''),
+          className: '',
+          id: '',
+          attributes: {},
+          childNodes: [],
+          parentNode: null,
+          nextSibling: null,
+          previousSibling: null,
+          style: {},
+          
+          // DOM properties
+          get children() {
+            // Return only element nodes (nodeType === 1), not text nodes
+            return this.childNodes.filter(child => child.nodeType === 1);
+          },
+          
+          get firstElementChild() {
+            const elementChildren = this.children;
+            return elementChildren.length > 0 ? elementChildren[0] : null;
+          },
+          
+          get lastElementChild() {
+            const elementChildren = this.children;
+            return elementChildren.length > 0 ? elementChildren[elementChildren.length - 1] : null;
+          },
+          
+          get nextElementSibling() {
+            if (!this.parentNode) return null;
+            const siblings = this.parentNode.children;
+            const index = siblings.indexOf(this);
+            return index >= 0 && index < siblings.length - 1 ? siblings[index + 1] : null;
+          },
+          
+          get previousElementSibling() {
+            if (!this.parentNode) return null;
+            const siblings = this.parentNode.children;
+            const index = siblings.indexOf(this);
+            return index > 0 ? siblings[index - 1] : null;
+          },
+          
+          // DOM methods
+          appendChild: function(child) {
+            this.childNodes.push(child);
+            child.parentNode = this;
+            return child;
+          },
+          removeChild: function(child) {
+            const index = this.childNodes.indexOf(child);
+            if (index > -1) {
+              this.childNodes.splice(index, 1);
+              child.parentNode = null;
+            }
+            return child;
+          },
+          setAttribute: function(name, value) {
+            this.attributes[name] = value;
+            if (name === 'id') this.id = value;
+            if (name === 'class') this.className = value;
+          },
+          getAttribute: function(name) {
+            return this.attributes[name] || null;
+          },
+          hasAttribute: function(name) {
+            return name in this.attributes;
+          },
+          removeAttribute: function(name) {
+            delete this.attributes[name];
+            if (name === 'id') this.id = '';
+            if (name === 'class') this.className = '';
+          },
+          querySelector: function() { return null; },
+          querySelectorAll: function() { return []; },
+          getElementsByTagName: createMockElementList,
+          cloneNode: function(deep) {
+            const clone = createMockElement(this.tagName, this.innerHTML);
+            clone.className = this.className;
+            clone.id = this.id;
+            clone.attributes = { ...this.attributes };
+            return clone;
+          }
+        };
+        return element;
+      };
+
+      // Enhanced document element using createMockElement
+      const documentElement = createMockElement('HTML');
+      documentElement.firstChild = { __JSDOMParser__: undefined };
+
+      // Enhanced body element with actual child structure
+      const bodyElement = createMockElement('BODY', domString);
+      
+      // Create a simple but effective DOM structure for Readability
+      console.log('🔧 [MarkDownload] Creating simplified DOM structure for Readability...');
+      try {
+        // Clear body children and create a main article container
+        bodyElement.childNodes = [];
+        
+        // Create a main article container - Readability likes article tags
+        const articleContainer = createMockElement('ARTICLE');
+        articleContainer.setAttribute('id', 'main-content');
+        articleContainer.setAttribute('class', 'post-content');
+        
+        // Extract text content and create paragraphs
+        const textContent = domString.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+        console.log('🔧 [MarkDownload] Extracted text content length:', textContent.length);
+        
+        if (textContent && textContent.length > 100) {
+          // Split into paragraphs based on sentence boundaries or line breaks
+          const paragraphs = textContent.split(/[.!?]\s+(?=[A-Z])|[\n\r]+/).filter(p => p.trim().length > 20);
+          console.log('🔧 [MarkDownload] Created', paragraphs.length, 'paragraphs');
+          
+          paragraphs.slice(0, 10).forEach((paraText, index) => { // Limit to first 10 paragraphs
+            const para = createMockElement('P');
+            const textNode = { 
+              nodeType: 3, 
+              nodeName: '#text', 
+              textContent: paraText.trim(), 
+              nodeValue: paraText.trim(), 
+              parentNode: para 
+            };
+            para.childNodes.push(textNode);
+            para.parentNode = articleContainer;
+            articleContainer.childNodes.push(para);
+          });
+          
+          // If we have few paragraphs, create more by splitting longer ones
+          if (articleContainer.childNodes.length < 3 && textContent.length > 500) {
+            const chunks = textContent.match(/.{1,200}(?:\s|$)/g) || [textContent];
+            chunks.slice(0, 5).forEach(chunk => {
+              const para = createMockElement('P');
+              const textNode = { 
+                nodeType: 3, 
+                nodeName: '#text', 
+                textContent: chunk.trim(), 
+                nodeValue: chunk.trim(), 
+                parentNode: para 
+              };
+              para.childNodes.push(textNode);
+              para.parentNode = articleContainer;
+              articleContainer.childNodes.push(para);
+            });
+          }
+        } else {
+          // Fallback: create a single paragraph with all content
+          const para = createMockElement('P');
+          const textNode = { 
+            nodeType: 3, 
+            nodeName: '#text', 
+            textContent: textContent || 'No content available', 
+            nodeValue: textContent || 'No content available', 
+            parentNode: para 
+          };
+          para.childNodes.push(textNode);
+          para.parentNode = articleContainer;
+          articleContainer.childNodes.push(para);
+        }
+        
+        // Add the article container to body
+        articleContainer.parentNode = bodyElement;
+        bodyElement.childNodes.push(articleContainer);
+        
+        console.log('🔧 [MarkDownload] Final DOM structure - Body children:', bodyElement.childNodes.length, 
+                   'Article children:', articleContainer.childNodes.length);
+        
+      } catch (parseError) {
+        console.error('🔧 [MarkDownload] Error creating DOM structure:', parseError);
+        // Fallback: ensure we have at least some content
+        if (bodyElement.childNodes.length === 0) {
+          const fallbackPara = createMockElement('P');
+          const textContent = domString.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+          const textNode = { 
+            nodeType: 3, 
+            nodeName: '#text', 
+            textContent: textContent.substring(0, 1000), 
+            nodeValue: textContent.substring(0, 1000), 
+            parentNode: fallbackPara 
+          };
+          fallbackPara.childNodes.push(textNode);
+          fallbackPara.parentNode = bodyElement;
+          bodyElement.childNodes.push(fallbackPara);
+        }
+      }
+      
       dom = {
-        documentElement: {
-          nodeName: "HTML",
-          removeAttribute: () => {},
-          querySelector: () => null,
-          querySelectorAll: () => []
+        documentElement: documentElement,
+        // Add firstChild to root document object for Readability
+        firstChild: {
+          __JSDOMParser__: undefined
         },
-        body: {
-          innerHTML: domString,
-          querySelector: () => null,
-          querySelectorAll: () => []
-        },
-        title: "Extracted Content"
+        body: bodyElement,
+        title: "Extracted Content",
+        baseURI: "about:blank",  // Add baseURI to prevent URL construction error
+        // Add getElementsByTagName to root document
+        getElementsByTagName: createMockElementList,
+        // Add more DOM methods
+        createElement: (tagName) => createMockElement(tagName),
+        createTextNode: (text) => ({
+          nodeType: 3,
+          nodeName: '#text',
+          textContent: text,
+          nodeValue: text,
+          parentNode: null
+        }),
+        // Add more document methods
+        getElementById: (id) => null,
+        getElementsByClassName: (className) => [],
+        querySelector: () => null,
+        querySelectorAll: () => []
       };
     }
   } catch (error) {
@@ -1001,7 +1619,220 @@ async function getArticleFromDom(domString) {
   let article;
   try {
     if (typeof Readability !== 'undefined' && dom.documentElement && dom.body) {
-      article = new Readability(dom).parse();
+      // Create custom serializer for Service Worker environment
+      const customSerializer = function(el) {
+        console.log('🔧 [MarkDownload] Custom serializer called for element:', el.nodeName);
+        
+        // If it's our mock element, return the original HTML content
+        if (el && el.innerHTML && typeof el.innerHTML === 'string') {
+          console.log('🔧 [MarkDownload] Custom serializer returning innerHTML length:', el.innerHTML.length);
+          return el.innerHTML;
+        }
+        
+        // If it's a mock element without innerHTML, construct HTML from structure
+        if (el && el.childNodes) {
+          console.log('🔧 [MarkDownload] Custom serializer constructing HTML from childNodes');
+          let html = '';
+          
+          const serializeNode = (node) => {
+            if (node.nodeType === 3) { // Text node
+              return node.textContent || node.nodeValue || '';
+            } else if (node.nodeType === 1) { // Element node
+              const tagName = node.nodeName.toLowerCase();
+              let attrs = '';
+              
+              // Add attributes
+              if (node.id) attrs += ` id="${node.id}"`;
+              if (node.className) attrs += ` class="${node.className}"`;
+              if (node.getAttribute) {
+                const href = node.getAttribute('href');
+                if (href) attrs += ` href="${href}"`;
+              }
+              
+              // Self-closing tags
+              if (['img', 'br', 'hr'].includes(tagName)) {
+                return `<${tagName}${attrs} />`;
+              }
+              
+              // Container tags
+              let childContent = '';
+              if (node.childNodes && node.childNodes.length > 0) {
+                childContent = node.childNodes.map(serializeNode).join('');
+              } else if (node.textContent) {
+                childContent = node.textContent;
+              }
+              
+              return `<${tagName}${attrs}>${childContent}</${tagName}>`;
+            }
+            return '';
+          };
+          
+          html = serializeNode(el);
+          console.log('🔧 [MarkDownload] Custom serializer constructed HTML length:', html.length);
+          return html;
+        }
+        
+        // Fallback
+        console.warn('🔧 [MarkDownload] Custom serializer fallback - returning original innerHTML or empty');
+        return el ? (el.innerHTML || '') : '';
+      };
+      
+      // Initialize Readability with custom serializer and debug options
+      console.log('🔧 [MarkDownload] Initializing Readability with DOM:', {
+        hasDocumentElement: !!dom.documentElement,
+        hasBody: !!dom.body,
+        bodyChildrenCount: dom.body ? dom.body.childNodes.length : 'N/A',
+        documentElementChildrenCount: dom.documentElement ? dom.documentElement.childNodes.length : 'N/A'
+      });
+      
+      const readability = new Readability(dom, { 
+        serializer: customSerializer,
+        debug: true // Enable debug logging
+      });
+      
+      console.log('🔧 [MarkDownload] Calling Readability.parse()...');
+      article = readability.parse();
+      console.log('🔧 [MarkDownload] Readability.parse() returned:', article ? 'success' : 'null');
+      
+      // If Readability failed, create article with smart content extraction
+      if (!article) {
+        console.log('🔧 [MarkDownload] Readability failed, performing smart content extraction...');
+        
+        // Smart content extraction function
+        const extractMainContent = (htmlString) => {
+          console.log('🔧 [MarkDownload] Starting smart content extraction...');
+          
+          // Remove unwanted elements
+          let cleaned = htmlString
+            .replace(/<script[^>]*>.*?<\/script>/gsi, '') // Remove scripts
+            .replace(/<style[^>]*>.*?<\/style>/gsi, '') // Remove styles
+            .replace(/<nav[^>]*>.*?<\/nav>/gsi, '') // Remove navigation
+            .replace(/<header[^>]*>.*?<\/header>/gsi, '') // Remove headers
+            .replace(/<footer[^>]*>.*?<\/footer>/gsi, '') // Remove footers
+            .replace(/<aside[^>]*>.*?<\/aside>/gsi, '') // Remove sidebars
+            .replace(/<!--.*?-->/gs, '') // Remove comments
+            .replace(/<iframe[^>]*>.*?<\/iframe>/gsi, '') // Remove iframes
+            .replace(/<noscript[^>]*>.*?<\/noscript>/gsi, ''); // Remove noscript
+          
+          // Extract meaningful content patterns
+          const contentPatterns = [
+            // Try to find article content
+            /<article[^>]*>(.*?)<\/article>/gsi,
+            // Try to find main content
+            /<main[^>]*>(.*?)<\/main>/gsi,
+            // Try to find content divs
+            /<div[^>]*(?:class|id)="[^"]*(?:content|article|post|entry|main)[^"]*"[^>]*>(.*?)<\/div>/gsi,
+            // Try to find text-heavy divs
+            /<div[^>]*>((?:[^<]*<(?!div)[^>]*>[^<]*<\/[^>]*>)*[^<]{100,}.*?)<\/div>/gsi
+          ];
+          
+          let extractedContent = '';
+          
+          for (const pattern of contentPatterns) {
+            const matches = cleaned.match(pattern);
+            if (matches && matches.length > 0) {
+              console.log('🔧 [MarkDownload] Found content with pattern, matches:', matches.length);
+              extractedContent = matches.join('\n');
+              break;
+            }
+          }
+          
+          // If no patterns matched, use the cleaned content
+          if (!extractedContent) {
+            extractedContent = cleaned;
+          }
+          
+          // Extract and structure text content
+          const structureContent = (content) => {
+            let structured = '';
+            
+            // Extract title if present
+            const titleMatch = content.match(/<h1[^>]*>(.*?)<\/h1>/i);
+            if (titleMatch) {
+              const title = titleMatch[1].replace(/<[^>]*>/g, '').trim();
+              if (title) {
+                structured += `<h1>${title}</h1>\n\n`;
+              }
+            }
+            
+            // Extract headings
+            const headings = Array.from(content.matchAll(/<h([2-6])[^>]*>(.*?)<\/h[2-6]>/gi));
+            const paragraphs = Array.from(content.matchAll(/<p[^>]*>(.*?)<\/p>/gi));
+            const divs = Array.from(content.matchAll(/<div[^>]*>(.*?)<\/div>/gi));
+            
+            // Combine all text content and split intelligently
+            let allText = content.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+            
+            if (headings.length > 0) {
+              console.log('🔧 [MarkDownload] Found', headings.length, 'headings');
+              headings.forEach(match => {
+                const level = match[1];
+                const text = match[2].replace(/<[^>]*>/g, '').trim();
+                if (text && text.length > 3) {
+                  structured += `<h${level}>${text}</h${level}>\n\n`;
+                }
+              });
+            }
+            
+            if (paragraphs.length > 0) {
+              console.log('🔧 [MarkDownload] Found', paragraphs.length, 'paragraphs');
+              paragraphs.forEach(match => {
+                const text = match[1].replace(/<[^>]*>/g, '').trim();
+                if (text && text.length > 20) {
+                  structured += `<p>${text}</p>\n\n`;
+                }
+              });
+            } else {
+              // Create paragraphs from text
+              console.log('🔧 [MarkDownload] Creating paragraphs from text, length:', allText.length);
+              if (allText) {
+                // Split by common paragraph indicators
+                const sections = allText.split(/[。！？]\s*(?=[A-Z\u4e00-\u9fff])|[\n\r]{2,}/).filter(s => s.trim().length > 30);
+                
+                sections.forEach(section => {
+                  const cleanSection = section.trim();
+                  if (cleanSection && cleanSection.length > 30) {
+                    structured += `<p>${cleanSection}</p>\n\n`;
+                  }
+                });
+              }
+            }
+            
+            return structured || `<p>${allText.substring(0, 2000)}</p>`;
+          };
+          
+          const result = structureContent(extractedContent);
+          console.log('🔧 [MarkDownload] Smart extraction result length:', result.length);
+          return result;
+        };
+        
+        console.log('📥 [MarkDownload] INPUT - Original DOM string length:', domString.length);
+        console.log('📥 [MarkDownload] INPUT - Original DOM preview:', domString.substring(0, 300) + '...');
+        
+        const smartContent = extractMainContent(domString);
+        
+        console.log('🔄 [MarkDownload] PROCESSING - Smart extraction output length:', smartContent.length);
+        console.log('🔄 [MarkDownload] PROCESSING - Smart extraction preview:', smartContent.substring(0, 500) + '...');
+        
+        const textContent = smartContent.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+        
+        article = {
+          title: dom.title || "Extracted Content",
+          content: smartContent,
+          textContent: textContent,
+          length: textContent.length,
+          excerpt: textContent.substring(0, 200) + "...",
+          byline: "",
+          siteName: "",
+          dir: null,
+          lang: null
+        };
+        
+        console.log('📤 [MarkDownload] OUTPUT - Article created');
+        console.log('📤 [MarkDownload] OUTPUT - Article title:', article.title);
+        console.log('📤 [MarkDownload] OUTPUT - Article content length:', article.content.length);
+        console.log('📤 [MarkDownload] OUTPUT - Article content preview:', article.content.substring(0, 300) + '...');
+      }
     } else {
       // Fallback for Service Worker environment
       console.log('🔧 [MarkDownload] getArticleFromDom: Using fallback article creation for Service Worker');
@@ -1018,20 +1849,22 @@ async function getArticleFromDom(domString) {
   } catch (error) {
     console.error('❌ [MarkDownload] getArticleFromDom: Error in Readability processing:', error);
     // Create a basic article from the DOM string
+    const textContent = domString.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
     article = {
       title: "Extracted Content",
       content: domString,
-      textContent: "",
-      length: domString.length,
-      excerpt: "",
+      textContent: textContent,
+      length: textContent.length,
+      excerpt: textContent.substring(0, 200) + "...",
       byline: "",
       siteName: ""
     };
   }
   
+  // Article should always exist at this point
   if (!article) {
-    console.error('❌ [MarkDownload] getArticleFromDom: Readability failed to parse article');
-    throw new Error('Readability failed to parse article');
+    console.error('❌ [MarkDownload] getArticleFromDom: Failed to create article');
+    throw new Error('Failed to create article');
   }
   
   console.log('🔧 [MarkDownload] getArticleFromDom: Readability processing complete');
@@ -1047,16 +1880,41 @@ async function getArticleFromDom(domString) {
   article.baseURI = dom.baseURI;
   // also grab the page title
   article.pageTitle = dom.title;
-  // and some URL info
-  const url = new URL(dom.baseURI);
-  article.hash = url.hash;
-  article.host = url.host;
-  article.origin = url.origin;
-  article.hostname = url.hostname;
-  article.pathname = url.pathname;
-  article.port = url.port;
-  article.protocol = url.protocol;
-  article.search = url.search;
+  
+  // and some URL info - handle invalid URLs safely
+  try {
+    if (dom.baseURI && dom.baseURI !== "about:blank") {
+      const url = new URL(dom.baseURI);
+      article.hash = url.hash;
+      article.host = url.host;
+      article.origin = url.origin;
+      article.hostname = url.hostname;
+      article.pathname = url.pathname;
+      article.port = url.port;
+      article.protocol = url.protocol;
+      article.search = url.search;
+    } else {
+      // Fallback for invalid or missing baseURI
+      article.hash = "";
+      article.host = "";
+      article.origin = "";
+      article.hostname = "";
+      article.pathname = "";
+      article.port = "";
+      article.protocol = "";
+      article.search = "";
+    }
+  } catch (urlError) {
+    console.warn('🔧 [MarkDownload] getArticleFromDom: Invalid baseURI, using fallback values:', dom.baseURI);
+    article.hash = "";
+    article.host = "";
+    article.origin = "";
+    article.hostname = "";
+    article.pathname = "";
+    article.port = "";
+    article.protocol = "";
+    article.search = "";
+  }
   
 
   // make sure the dom has a head
